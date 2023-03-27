@@ -1,129 +1,203 @@
-import {lookupArchive} from "@subsquid/archive-registry"
-import * as ss58 from "@subsquid/ss58"
-import {BatchContext, BatchProcessorItem, SubstrateBatchProcessor} from "@subsquid/substrate-processor"
-import {Store, TypeormDatabase} from "@subsquid/typeorm-store"
-import {In} from "typeorm"
-import {Account, Transfer} from "./model"
-import {BalancesTransferEvent} from "./types/events"
+import { BLACKLIST_CONFIG, getChainConfig } from './config'
+import { TypeormDatabase } from '@subsquid/typeorm-store'
+import { Block as BlockEntity, Call, Event, Extrinsic } from './model'
+import {
+    BatchProcessorCallItem,
+    SubstrateBatchProcessor
+} from '@subsquid/substrate-processor'
+import { encodeAccount, getParsedArgs, ItemsLogger } from './utils/common'
 
+const CHAIN_CONFIG = getChainConfig()
 
 const processor = new SubstrateBatchProcessor()
-    .setDataSource({
-        // Lookup archive by the network name in the Subsquid registry
-        //archive: lookupArchive("kusama", {release: "FireSquid"})
-
-        // Use archive created by archive/docker-compose.yml
-        archive: lookupArchive('kusama', {release: 'FireSquid'} )
-    })
-    .addEvent('Balances.Transfer', {
+    //.setBlockRange(CHAIN_CONFIG.blockRange ?? { from: 1_000_000 })
+    .setDataSource(CHAIN_CONFIG.dataSource)
+    .addEvent('*', {
         data: {
             event: {
-                args: true,
-                extrinsic: {
-                    hash: true,
-                    fee: true
-                }
+                extrinsic: true,
+                indexInBlock: true,
+                args: true
             }
         }
     } as const)
+    .addCall('*', {
+        data: {
+            call: {
+                parent: true,
+                args: true
+            },
+            extrinsic: true
+        }
+    } as const)
+    .includeAllBlocks()
 
+type CallItem = BatchProcessorCallItem<typeof processor>
 
-type Item = BatchProcessorItem<typeof processor>
-type Ctx = BatchContext<Store, Item>
+processor.run(new TypeormDatabase(), async (ctx) => {
+    const entitiesStore = new Map<
+        'block' | 'event' | 'call' | 'extrinsic',
+        Map<string, BlockEntity | Event | Call | Extrinsic>
+    >()
+    entitiesStore.set('block', new Map())
+    entitiesStore.set('event', new Map())
+    entitiesStore.set('call', new Map())
+    entitiesStore.set('extrinsic', new Map())
 
-
-processor.run(new TypeormDatabase(), async ctx => {
-    let transfersData = getTransfers(ctx)
-
-    let accountIds = new Set<string>()
-    for (let t of transfersData) {
-        accountIds.add(t.from)
-        accountIds.add(t.to)
-    }
-
-    let accounts = await ctx.store.findBy(Account, {id: In([...accountIds])}).then(accounts => {
-        return new Map(accounts.map(a => [a.id, a]))
-    })
-
-    let transfers: Transfer[] = []
-
-    for (let t of transfersData) {
-        let {id, blockNumber, timestamp, extrinsicHash, amount, fee} = t
-
-        let from = getAccount(accounts, t.from)
-        let to = getAccount(accounts, t.to)
-
-        transfers.push(new Transfer({
-            id,
-            blockNumber,
-            timestamp,
-            extrinsicHash,
-            from,
-            to,
-            amount,
-            fee
-        }))
-    }
-
-    await ctx.store.save(Array.from(accounts.values()))
-    await ctx.store.insert(transfers)
-})
-
-
-interface TransferEvent {
-    id: string
-    blockNumber: number
-    timestamp: Date
-    extrinsicHash?: string
-    from: string
-    to: string
-    amount: bigint
-    fee?: bigint
-}
-
-
-function getTransfers(ctx: Ctx): TransferEvent[] {
-    let transfers: TransferEvent[] = []
+    if (!ItemsLogger.isInitialized())
+        await ItemsLogger.init({ block: ctx.blocks[0] as any, ...ctx })
     for (let block of ctx.blocks) {
+        const currentBlock = new BlockEntity({
+            id: block.header.id,
+            height: block.header.height,
+            hash: block.header.hash,
+            parentHash: block.header.parentHash,
+            timestamp: new Date(block.header.timestamp),
+            specVersion: Number(block.header.specId.split('@')[1]),
+            validator: block.header.validator,
+            extrinsicsCount: 0,
+            callsCount: 0,
+            eventsCount: 0
+        })
+        entitiesStore.get('block')!.set(currentBlock.id, currentBlock)
+
         for (let item of block.items) {
-            if (item.name == "Balances.Transfer") {
-                let e = new BalancesTransferEvent(ctx, item.event)
-                let rec: {from: Uint8Array, to: Uint8Array, amount: bigint}
-                if (e.isV1020) {
-                    let [from, to, amount] = e.asV1020
-                    rec = { from, to, amount}
-                } else if (e.isV1050) {
-                    let [from, to, amount] = e.asV1050
-                    rec = { from, to, amount}
-                } else if (e.isV9130) {
-                    rec = e.asV9130
-                } else {
-                    throw new Error('Unsupported spec')
+            switch (item.kind) {
+                case 'event': {
+                    currentBlock.eventsCount += 1
+                    const { id, name, indexInBlock, extrinsic, args } = item.event
+
+                    const decoratedName = name.split('.')
+
+                    const newEvent = new Event({
+                        id,
+                        block: currentBlock,
+                        blockNumber: currentBlock.height,
+                        timestamp: currentBlock.timestamp,
+                        indexInBlock: indexInBlock ?? null,
+                        palletName: decoratedName[0],
+                        eventName: decoratedName[1]
+                    })
+
+                    ItemsLogger.addEvent({
+                        itemName: newEvent.eventName,
+                        palletName: newEvent.palletName
+                    })
+
+                    if (!BLACKLIST_CONFIG.blacklistItems.includes(name))
+                        try {
+                            newEvent.argsStr = getParsedArgs(args)
+                        } catch (e) {
+                            ctx.log.warn('Event args cannot be stringified.')
+                            console.dir(e, { depth: null })
+                        }
+
+                    if (extrinsic) {
+                        // @ts-ignore
+                        newEvent.extrinsic = { id: extrinsic.id }
+                        newEvent.extrinsicHash = extrinsic.hash
+                        // @ts-ignore
+                        newEvent.call = { id: extrinsic.call.id }
+                    }
+                    entitiesStore.get('event')!.set(newEvent.id, newEvent)
+                    break
                 }
-                
-                transfers.push({
-                    id: item.event.id,
-                    blockNumber: block.header.height,
-                    timestamp: new Date(block.header.timestamp),
-                    extrinsicHash: item.event.extrinsic?.hash,
-                    from: ss58.codec('kusama').encode(rec.from),
-                    to: ss58.codec('kusama').encode(rec.to),
-                    amount: rec.amount,
-                    fee: item.event.extrinsic?.fee || 0n
-                })
+                case 'call': {
+                    currentBlock.callsCount += 1
+                    const { extrinsic }: CallItem = item
+                    const decoratedCallName = item.call.name.split('.')
+                    const rawAddress =
+                        extrinsic.signature?.address?.value || extrinsic?.signature?.address
+
+                    // Removed address encoding
+
+                    // let signer: string | null = null
+                    // let encodedSignerAccount: string | null = null
+                    // if (rawAddress) {
+                    //   signer = rawAddress
+                    //   encodedSignerAccount = encodeAccount(signer, CHAIN_CONFIG.prefix)
+                    // }
+                    const newExtrinsic = new Extrinsic({
+                        id: item.extrinsic.id,
+                        block: currentBlock,
+                        blockNumber: currentBlock.height,
+                        timestamp: currentBlock.timestamp,
+                        extrinsicHash: extrinsic.hash,
+                        indexInBlock: extrinsic.indexInBlock,
+                        version: extrinsic.version,
+                        signerPublicKey: rawAddress,
+                        error: extrinsic.error ? JSON.stringify(extrinsic.error) : null,
+                        success: extrinsic.success,
+                        tip: extrinsic.tip,
+                        fee: extrinsic.fee
+                    })
+
+                    const newCall = new Call({
+                        id: item.call.id,
+                        palletName: decoratedCallName[0],
+                        callName: decoratedCallName[1],
+                        parentId: item.call.parent?.id ?? null,
+                        blockNumber: currentBlock.height,
+                        timestamp: currentBlock.timestamp,
+                        block: currentBlock,
+                        extrinsic: newExtrinsic,
+                        extrinsicHash: newExtrinsic.extrinsicHash,
+                        success: extrinsic.success,
+                        callerPublicKey: rawAddress
+                    })
+
+                    // If this is main call of the extrinsic
+                    if (newCall.parentId == null) {
+                        currentBlock.extrinsicsCount += 1
+                        newExtrinsic.mainCall = newCall
+                    }
+
+                    ItemsLogger.addCall(
+                        { itemName: newCall.callName, palletName: newCall.palletName },
+                        !newCall.parentId
+                    )
+
+                    if (!BLACKLIST_CONFIG.blacklistItems.includes(item.call.name)) {
+                        try {
+                            newCall.argsStr = getParsedArgs(item.call.args)
+                        } catch (e) {
+                            ctx.log.warn(
+                                `Event args cannot be stringified in call ${item.call.id}.`
+                            )
+                            console.dir(e, { depth: null })
+                        }
+                    }
+
+                    entitiesStore.get('call')!.set(newCall.id, newCall)
+                    entitiesStore.get('extrinsic')!.set(newExtrinsic.id, newExtrinsic)
+
+                    break
+                }
+                default:
             }
         }
     }
-    return transfers
-}
+    await ItemsLogger.saveToDB({ block: ctx.blocks[0] as any, ...ctx })
+    const blocks = entitiesStore.get('block')
+    if (blocks && blocks.size > 0) await ctx.store.insert([...blocks.values()])
 
-
-function getAccount(m: Map<string, Account>, id: string): Account {
-    let acc = m.get(id)
-    if (acc == null) {
-        acc = new Account()
-        acc.id = id
-        m.set(id, acc)
+    // Save only ids first because of cyclic dependency extrinsic<-->call
+    const extrinsics = entitiesStore.get('extrinsic')
+    if (extrinsics && extrinsics.size > 0) {
+        const extrinsicsIds = [...extrinsics.keys()].map(
+            (id) => new Extrinsic({ id })
+        )
+        await ctx.store.insert(extrinsicsIds)
     }
-    return acc
-}
+
+    const calls = entitiesStore.get('call')
+    if (calls && calls.size > 0) await ctx.store.insert([...calls.values()])
+
+    // Save full info of extrinsics
+    if (extrinsics && extrinsics.size > 0) {
+        await ctx.store.save([...extrinsics.values()])
+    }
+
+    const events = entitiesStore.get('event')
+    if (events && events.size > 0) await ctx.store.insert([...events.values()])
+})
