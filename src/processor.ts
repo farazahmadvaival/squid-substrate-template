@@ -7,8 +7,15 @@ import {
 } from '@subsquid/substrate-processor'
 import { encodeAccount, getParsedArgs, ItemsLogger } from './utils/common'
 
-const CHAIN_CONFIG = getChainConfig()
-
+const CHAIN_CONFIG = {
+    chainName: 'atlantis',
+    dataSource: {
+        archive: 'https://elysium-testnet.archive.subsquid.io/graphql',
+        chain: 'wss://ws.atlantischain.network'
+    },
+    blockRange: { from: 4600000 }
+};
+console.log('CHAIN_CONFIG', CHAIN_CONFIG);
 const processor = new SubstrateBatchProcessor()
     //.setBlockRange(CHAIN_CONFIG.blockRange ?? { from: 1_000_000 })
     .setDataSource(CHAIN_CONFIG.dataSource)
