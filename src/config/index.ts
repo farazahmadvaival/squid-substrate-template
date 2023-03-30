@@ -16,5 +16,6 @@ function getJSON(filename: string) {
 }
 
 export function getChainConfig(): ProcessorConfig {
+  console.log('getChainConfig method---------');
   return require('./chains/atlantis').defaultÏ
 }
