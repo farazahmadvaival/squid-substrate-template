@@ -1,11 +1,11 @@
-import { BLACKLIST_CONFIG, getChainConfig } from './config'
-import { TypeormDatabase } from '@subsquid/typeorm-store'
-import { Block as BlockEntity, Call, Event, Extrinsic } from './model'
+import {BLACKLIST_CONFIG, getChainConfig} from './config'
+import {TypeormDatabase} from '@subsquid/typeorm-store'
+import {Block as BlockEntity, Call, Event, Extrinsic} from './model'
 import {
     BatchProcessorCallItem,
     SubstrateBatchProcessor
 } from '@subsquid/substrate-processor'
-import { encodeAccount, getParsedArgs, ItemsLogger } from './utils/common'
+import {encodeAccount, getParsedArgs, ItemsLogger} from './utils/common'
 
 const CHAIN_CONFIG = {
     chainName: 'atlantis',
@@ -13,11 +13,15 @@ const CHAIN_CONFIG = {
         archive: 'https://elysium-testnet.archive.subsquid.io/graphql',
         chain: 'wss://ws.atlantischain.network'
     },
-    blockRange: { from: 4600000 }
+    blockRange: {
+        from:
+            4663339,
+        // to:
+        //     4663339
+    }
 };
-console.log('CHAIN_CONFIG', CHAIN_CONFIG);
 const processor = new SubstrateBatchProcessor()
-    //.setBlockRange(CHAIN_CONFIG.blockRange ?? { from: 1_000_000 })
+    .setBlockRange(CHAIN_CONFIG.blockRange ?? {from: 1_000_000})
     .setDataSource(CHAIN_CONFIG.dataSource)
     .addEvent('*', {
         data: {
@@ -42,17 +46,15 @@ const processor = new SubstrateBatchProcessor()
 type CallItem = BatchProcessorCallItem<typeof processor>
 
 processor.run(new TypeormDatabase(), async (ctx) => {
-    const entitiesStore = new Map<
-        'block' | 'event' | 'call' | 'extrinsic',
-        Map<string, BlockEntity | Event | Call | Extrinsic>
-    >()
+    const entitiesStore = new Map<'block' | 'event' | 'call' | 'extrinsic',
+        Map<string, BlockEntity | Event | Call | Extrinsic>>()
     entitiesStore.set('block', new Map())
     entitiesStore.set('event', new Map())
     entitiesStore.set('call', new Map())
     entitiesStore.set('extrinsic', new Map())
 
     if (!ItemsLogger.isInitialized())
-        await ItemsLogger.init({ block: ctx.blocks[0] as any, ...ctx })
+        await ItemsLogger.init({block: ctx.blocks[0] as any, ...ctx})
     for (let block of ctx.blocks) {
         const currentBlock = new BlockEntity({
             id: block.header.id,
@@ -72,7 +74,7 @@ processor.run(new TypeormDatabase(), async (ctx) => {
             switch (item.kind) {
                 case 'event': {
                     currentBlock.eventsCount += 1
-                    const { id, name, indexInBlock, extrinsic, args } = item.event
+                    const {id, name, indexInBlock, extrinsic, args} = item.event
 
                     const decoratedName = name.split('.')
 
@@ -93,25 +95,25 @@ processor.run(new TypeormDatabase(), async (ctx) => {
 
                     if (!BLACKLIST_CONFIG.blacklistItems.includes(name))
                         try {
-                            newEvent.argsStr = getParsedArgs(args)
+                            newEvent.argsStr = args
                         } catch (e) {
                             ctx.log.warn('Event args cannot be stringified.')
-                            console.dir(e, { depth: null })
+                            console.dir(e, {depth: null})
                         }
 
                     if (extrinsic) {
                         // @ts-ignore
-                        newEvent.extrinsic = { id: extrinsic.id }
+                        newEvent.extrinsic = {id: extrinsic.id}
                         newEvent.extrinsicHash = extrinsic.hash
                         // @ts-ignore
-                        newEvent.call = { id: extrinsic.call.id }
+                        newEvent.call = {id: extrinsic.call.id}
                     }
                     entitiesStore.get('event')!.set(newEvent.id, newEvent)
                     break
                 }
                 case 'call': {
                     currentBlock.callsCount += 1
-                    const { extrinsic }: CallItem = item
+                    const {extrinsic}: CallItem = item
                     const decoratedCallName = item.call.name.split('.')
                     const rawAddress =
                         extrinsic.signature?.address?.value || extrinsic?.signature?.address
@@ -160,18 +162,19 @@ processor.run(new TypeormDatabase(), async (ctx) => {
                     }
 
                     ItemsLogger.addCall(
-                        { itemName: newCall.callName, palletName: newCall.palletName },
+                        {itemName: newCall.callName, palletName: newCall.palletName},
                         !newCall.parentId
                     )
 
                     if (!BLACKLIST_CONFIG.blacklistItems.includes(item.call.name)) {
                         try {
-                            newCall.argsStr = getParsedArgs(item.call.args)
+                            // newCall.argsStr = getParsedArgs(item.call.args)
+                            newCall.argsStr = item.call.args
                         } catch (e) {
                             ctx.log.warn(
                                 `Event args cannot be stringified in call ${item.call.id}.`
                             )
-                            console.dir(e, { depth: null })
+                            console.dir(e, {depth: null})
                         }
                     }
 
