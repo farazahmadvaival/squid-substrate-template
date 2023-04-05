@@ -16,12 +16,12 @@ const CHAIN_CONFIG = {
     blockRange: {
         from:
             4663339,
-        // to:
-        //     4663339
+        to:
+            4663339
     }
 };
 const processor = new SubstrateBatchProcessor()
-    .setBlockRange(CHAIN_CONFIG.blockRange ?? {from: 1_000_000})
+    // .setBlockRange(CHAIN_CONFIG.blockRange ?? {from: 1_000_000})
     .setDataSource(CHAIN_CONFIG.dataSource)
     .addEvent('*', {
         data: {
