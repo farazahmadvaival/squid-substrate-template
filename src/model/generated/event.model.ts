@@ -51,6 +51,6 @@ export class Event {
     @Column_("text", {nullable: false})
     palletName!: string
 
-    @Column_("text", {array: true, nullable: true})
-    argsStr!: (string | undefined | null)[] | undefined | null
+    @Column_("text", {nullable: true})
+    argsStr!: string | undefined | null
 }

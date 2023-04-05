@@ -52,6 +52,6 @@ export class Call {
     @Column_("text", {nullable: true})
     callerPublicKey!: string | undefined | null
 
-    @Column_("text", {array: true, nullable: true})
-    argsStr!: (string | undefined | null)[] | undefined | null
+    @Column_("jsonb", {nullable: true})
+    argsStr!: unknown | undefined | null
 }
