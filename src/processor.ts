@@ -1,27 +1,20 @@
-import {BLACKLIST_CONFIG, getChainConfig} from './config'
+import {BLACKLIST_CONFIG} from './config'
 import {TypeormDatabase} from '@subsquid/typeorm-store'
 import {Block as BlockEntity, Call, Event, Extrinsic} from './model'
 import {
     BatchProcessorCallItem,
     SubstrateBatchProcessor
 } from '@subsquid/substrate-processor'
-import {encodeAccount, getParsedArgs, ItemsLogger} from './utils/common'
+import {ItemsLogger} from './utils/common'
 
 const CHAIN_CONFIG = {
     chainName: 'atlantis',
     dataSource: {
         archive: 'https://elysium-testnet.archive.subsquid.io/graphql',
         chain: 'wss://ws.atlantischain.network'
-    },
-    blockRange: {
-        from:
-            4663339,
-        to:
-            4663339
     }
 };
 const processor = new SubstrateBatchProcessor()
-    // .setBlockRange(CHAIN_CONFIG.blockRange ?? {from: 1_000_000})
     .setDataSource(CHAIN_CONFIG.dataSource)
     .addEvent('*', {
         data: {
