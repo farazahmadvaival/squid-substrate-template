@@ -8,7 +8,7 @@ import {
 import {ItemsLogger} from './utils/common'
 
 const CHAIN_CONFIG = {
-    chainName: 'atlantis',
+    chainName: process.env.CHAIN,
     dataSource: {
         archive: process.env.ARCHIVE,
         chain: process.env.CHAIN_URL
