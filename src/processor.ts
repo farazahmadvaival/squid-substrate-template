@@ -10,11 +10,12 @@ import {ItemsLogger} from './utils/common'
 const CHAIN_CONFIG = {
     chainName: 'atlantis',
     dataSource: {
-        archive: 'https://elysium-testnet.archive.subsquid.io/graphql',
-        chain: 'wss://ws.atlantischain.network'
+        archive: process.env.ARCHIVE,
+        chain: process.env.CHAIN_URL
     }
 };
 const processor = new SubstrateBatchProcessor()
+    // @ts-ignore
     .setDataSource(CHAIN_CONFIG.dataSource)
     .addEvent('*', {
         data: {
@@ -180,7 +181,7 @@ processor.run(new TypeormDatabase(), async (ctx) => {
             }
         }
     }
-    await ItemsLogger.saveToDB({ block: ctx.blocks[0] as any, ...ctx })
+    await ItemsLogger.saveToDB({block: ctx.blocks[0] as any, ...ctx})
     const blocks = entitiesStore.get('block')
     if (blocks && blocks.size > 0) await ctx.store.insert([...blocks.values()])
 
@@ -188,7 +189,7 @@ processor.run(new TypeormDatabase(), async (ctx) => {
     const extrinsics = entitiesStore.get('extrinsic')
     if (extrinsics && extrinsics.size > 0) {
         const extrinsicsIds = [...extrinsics.keys()].map(
-            (id) => new Extrinsic({ id })
+            (id) => new Extrinsic({id})
         )
         await ctx.store.insert(extrinsicsIds)
     }
